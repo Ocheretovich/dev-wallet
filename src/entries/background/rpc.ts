@@ -1,5 +1,7 @@
 import {
   type Address,
+  hexToNumber,
+  isHex,
   type RpcTransactionReceipt,
   type RpcTransactionRequest,
   keccak256,
@@ -188,6 +190,33 @@ export function setupRpcHandler({ messenger }: { messenger: Messenger }) {
         } as RpcResponse
       }
 
+      if (request.method === 'wallet_switchEthereumChain') {
+        if (!session) return rpcError(request, 4100, 'Unauthorized')
+
+        const param = (request.params as [{ chainId?: unknown }] | undefined)?.[0]
+        const chainIdHex = param?.chainId
+        if (typeof chainIdHex !== 'string' || !isHex(chainIdHex))
+          return rpcError(
+            request,
+            -32602,
+            'Invalid chainId: expected a 0x-prefixed hex string',
+          )
+
+        const chainId = hexToNumber(chainIdHex)
+        const { network, networks, switchNetwork } = networkStore.getState()
+
+        // Already on this chain: nothing to do.
+        if (network.chainId === chainId)
+          return { id: request.id, jsonrpc: '2.0', result: null } as RpcResponse
+
+        const target = networks.find((x) => x.chainId === chainId)
+        if (!target)
+          return rpcError(request, 4902, `Unrecognized chain ID "${chainIdHex}".`)
+
+        switchNetwork(target.rpcUrl)
+        return { id: request.id, jsonrpc: '2.0', result: null } as RpcResponse
+      }
+
       if (request.method === 'wallet_getCapabilities') {
         const { networks } = networkStore.getState()
         return {
@@ -224,6 +253,14 @@ export function setupRpcHandler({ messenger }: { messenger: Messenger }) {
 
     return execute(rpcClient, request)
   })
+}
+
+function rpcError(request: RpcRequest, code: number, message: string) {
+  return {
+    id: request.id,
+    jsonrpc: '2.0',
+    error: { code, message },
+  } as RpcResponse
 }
 
 function declinedResponse(
